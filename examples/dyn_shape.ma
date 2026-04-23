@@ -82,7 +82,16 @@ def total(s: dyn Shape) -> u64:
 def main():
     # Struct initialization with the new `Circle { ... }` syntax.
     var c: Circle = Circle { radius: 3 }
-    var c_area: u64 = Circle__area(c)        # static dispatch: r*r = 9
+    
+    # Static dispatch: calling methods on a concrete struct.
+    # `c.area()` is resolved at compile time to `Circle__area(c)`.
+    var c_area: u64 = c.area()               # static dispatch: r*r = 9
+    var c_perim: u64 = c.perimeter()         # static dispatch: r*4 = 12
+    
+    # Alternative: direct function call using mangled name
+    var c_area_direct: u64 = Circle__area(c)
+    
+    pass
     var c_peri: u64 = Circle__perimeter(c)   # static dispatch: r*4 = 12
 
     var sq: Square = Square { side: 4 }

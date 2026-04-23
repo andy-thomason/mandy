@@ -319,6 +319,28 @@ pub fn lower<'src>(
         .map(|(nid, tid)| (*nid, ir_type_of(&infer_result.store.resolve(*tid))))
         .collect();
 
+    // Build a map from struct NodeId to struct name.
+    let mut struct_names: HashMap<NodeId, String> = HashMap::new();
+    for item in &module.items {
+        if let ItemKind::StructDef(sd) = &item.kind {
+            let base = source.as_ptr() as usize;
+            let ptr  = sd.src.as_ptr() as usize;
+            let nid  = NodeId(ptr.saturating_sub(base));
+            struct_names.insert(nid, sd.name.to_string());
+        }
+    }
+
+    // Build a map from NodeId to struct name for variables with struct types.
+    // This allows static method dispatch resolution to know the concrete type.
+    let mut struct_type_of: HashMap<NodeId, String> = HashMap::new();
+    for (nid, tid) in &infer_result.types {
+        if let Type::Struct(struct_nid) = infer_result.store.resolve(*tid) {
+            if let Some(name) = struct_names.get(&struct_nid) {
+                struct_type_of.insert(*nid, name.clone());
+            }
+        }
+    }
+
     // For each Fn-typed node, extract the return type so lower_fn can look it up.
     // An unresolved (Error) return type means no annotation and no return statement → void.
     let fn_ret_types: HashMap<NodeId, IrType> = infer_result
@@ -350,11 +372,27 @@ pub fn lower<'src>(
         }
     }
 
+    // Pre-pass: build concrete method names for static dispatch.
+    // Maps (type_name, method_name) → mangled_fn_name for direct calls on concrete types.
+    let mut concrete_method_names: HashMap<(String, String), String> = HashMap::new();
+    for item in &module.items {
+        if let ItemKind::ImplFor(i) = &item.kind {
+            for m in &i.methods {
+                let mangled = format!("{}__{}",  i.type_name, m.name);
+                concrete_method_names
+                    .entry((i.type_name.to_string(), m.name.to_string()))
+                    .or_insert(mangled);
+            }
+        }
+    }
+
     let mut lowerer = Lowerer {
         source,
         ir_types: &ir_types,
+        struct_type_of: &struct_type_of,
         fn_ret_types: &fn_ret_types,
         vtable_method_index: &vtable_method_index,
+        concrete_method_names: &concrete_method_names,
         diagnostics: Vec::new(),
     };
 
@@ -508,11 +546,17 @@ impl<'src> FnBuilder<'src> {
 struct Lowerer<'src, 'ir> {
     source:       &'src str,
     ir_types:     &'ir HashMap<NodeId, IrType>,
+    /// Maps NodeId → struct name for variables that have concrete struct types.
+    /// Used for static method dispatch resolution.
+    struct_type_of: &'ir HashMap<NodeId, String>,
     /// Maps function-declaration NodeId → return IrType (extracted from Fn types).
     fn_ret_types: &'ir HashMap<NodeId, IrType>,
     /// Maps `(trait_name, method_name)` → vtable slot index.
     /// Populated by `lower()` as it processes `ImplFor` items.
     vtable_method_index: &'ir HashMap<(String, String), usize>,
+    /// Maps `(type_name, method_name)` → mangled function name for static dispatch.
+    /// Used to resolve trait method calls on concrete types (non-dyn).
+    concrete_method_names: &'ir HashMap<(String, String), String>,
     diagnostics:  Vec<IrDiagnostic<'src>>,
 }
 
@@ -914,10 +958,12 @@ impl<'src, 'ir> Lowerer<'src, 'ir> {
                 let ty  = self.type_of(expr.src);
                 let dst = if ty == IrType::Void { None } else { Some(b.fresh()) };
 
-                // Dyn call: `receiver.method(args)` where receiver has a Dyn type.
-                // The receiver is a fat pointer; dispatch through its vtable.
+                // Method call detection: check if func is an attribute access
                 if let ExprKind::Attr { obj, attr } = &func.kind {
                     let obj_ty = self.type_of(obj.src);
+                    
+                    // Dyn call: `receiver.method(args)` where receiver has a Dyn type.
+                    // The receiver is a fat pointer; dispatch through its vtable.
                     if let IrType::Dyn { trait_name } = obj_ty {
                         let key = (trait_name.clone(), attr.to_string());
                         if let Some(&method_idx) = self.vtable_method_index.get(&key) {
@@ -936,6 +982,26 @@ impl<'src, 'ir> Lowerer<'src, 'ir> {
                                 message: "method not found in vtable for dyn call",
                             });
                             return b.fresh();
+                        }
+                    }
+                    
+                    // Static dispatch: `receiver.method(args)` where receiver is a concrete struct.
+                    // Look up the concrete type of the receiver and emit a direct call.
+                    if let ExprKind::Name(name) = &obj.kind {
+                        let base = self.source.as_ptr() as usize;
+                        let ptr  = obj.src.as_ptr() as usize;
+                        let obj_nid = NodeId(ptr.saturating_sub(base));
+                        if let Some(type_name) = self.struct_type_of.get(&obj_nid) {
+                            let key = (type_name.clone(), attr.to_string());
+                            if let Some(fn_name) = self.concrete_method_names.get(&key) {
+                                let _obj_val = self.lower_expr(obj, b);
+                                b.emit(expr.src, InstKind::DirectCall {
+                                    dst,
+                                    func_name: fn_name.clone(),
+                                    args: arg_vals,
+                                });
+                                return dst.unwrap_or_else(|| b.fresh());
+                            }
                         }
                     }
                 }
