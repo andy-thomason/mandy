@@ -39,6 +39,9 @@ Integer types are as in Rust but any number of bits (u1-u2048) (i1-i2048)
 
 Floating point types use bit size and mantissa size like f16_8 for bf16 or just f32 for ieee mantissa sizes.
 
+Reference types are as in Rust with slices allowed. For sub-byte types, slices use bits instead of bytes for
+the pointer. Pointers are also allowed as in Rust.
+
 * Structs are similar to mojo, but we have separate impl blocks as in rust for methods.
 
 * Write some examples of Mandy for testing. A 256 bit fibanocci, a matrix multiply. We may revise the syntax down the line.
@@ -57,7 +60,7 @@ Floating point types use bit size and mantissa size like f16_8 for bf16 or just 
   - `FloatLiteral(&'src str)`
   - `StringLiteral(&'src str)` — includes delimiters for span accuracy
   - `Punctuation(&'src str)` — single or double-character operators and brackets
-  - `Indent(usize)` — column depth of the new indent level
+  - `Indent(&'src str)` — Length of string is the column depth.
   - `Dedent` — emitted when indentation decreases; may emit multiple
   - `Newline`
   - `Comment(&'src str)`
