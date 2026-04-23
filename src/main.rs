@@ -1,6 +1,7 @@
 mod actor;
 mod ast;
 mod async_transform;
+mod ir;
 mod lexer;
 mod parser;
 mod resolve;
@@ -54,6 +55,13 @@ fn compile(file: &PathBuf) -> bool {
         had_error = true;
     }
 
+    let mut infer_result = types::infer(&source, &parse_result.module, &resolve_result.resolutions);
+
+    for diag in &infer_result.diagnostics {
+        eprintln!("type error: {:?}", diag);
+        had_error = true;
+    }
+
     let async_result = async_transform::transform(&parse_result.module);
 
     for diag in &async_result.diagnostics {
@@ -74,6 +82,16 @@ fn compile(file: &PathBuf) -> bool {
 
     if !actor_result.analyses.is_empty() {
         eprintln!("info: {} actor(s) found", actor_result.analyses.len());
+    }
+
+    let ir_module = ir::lower(&source, &parse_result.module, &mut infer_result);
+
+    for diag in &ir_module.diagnostics {
+        eprintln!("ir warning: {}", diag.message);
+    }
+
+    if !ir_module.functions.is_empty() {
+        eprintln!("info: {} function(s) lowered to IR", ir_module.functions.len());
     }
 
     !had_error
