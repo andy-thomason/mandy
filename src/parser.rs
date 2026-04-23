@@ -455,17 +455,17 @@ impl<'src> Parser<'src> {
         while !matches!(self.peek(), Token::Punctuation(":") | Token::Eof) {
             let start = self.current_src();
             let name = match self.expect_ident() { Some(n) => n, None => break };
-            let annotation = if matches!(self.peek(), Token::Punctuation(":")) {
-                // ':' ends the lambda params in this position — stop.
-                // (Annotation syntax not supported in lambda params for simplicity.)
+            // ':' ends the lambda params — push the final param then stop.
+            if matches!(self.peek(), Token::Punctuation(":")) {
+                params.push(Param { src: self.src_from(start), name, annotation: None, default: None });
                 break;
-            } else { None };
+            }
             let default = if matches!(self.peek(), Token::Punctuation("=")) {
                 self.advance();
                 Some(self.parse_expr(0))
             } else { None };
             let src = self.src_from(start);
-            params.push(Param { src, name, annotation, default });
+            params.push(Param { src, name, annotation: None, default });
             if matches!(self.peek(), Token::Punctuation(",")) { self.advance(); }
         }
         params
@@ -647,7 +647,9 @@ impl<'src> Parser<'src> {
     fn parse_for_stmt(&mut self) -> Stmt<'src> {
         let start = self.current_src();
         self.expect_kw("for");
-        let target = self.parse_expr(0);
+        // Parse target with min_bp=11 so the `in` keyword (l_bp=10) is not
+        // consumed as a binary operator.
+        let target = self.parse_expr(11);
         self.expect_kw("in");
         let iter = self.parse_expr(0);
         self.expect_punct(":");
