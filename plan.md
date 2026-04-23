@@ -42,6 +42,11 @@ Floating point types use bit size and mantissa size like f16_8 for bf16 or just 
 Reference types are as in Rust with slices allowed. For sub-byte types, slices use bits instead of bytes for
 the pointer. Pointers are also allowed as in Rust.
 
+Multidimensional slices are also possible. Given a tensor, we should be able to slice as &[10..20, 30..40]
+In this case we need strides and lengths for all dimensions.
+
+Multiplying slices with %*% applies tensor multiply rules yielding an array. Binops/Unops slices works element-wise as in R.
+
 * Structs are similar to mojo, but we have separate impl blocks as in rust for methods.
 
 * Write some examples of Mandy for testing. A 256 bit fibanocci, a matrix multiply. We may revise the syntax down the line.
