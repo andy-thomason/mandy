@@ -1,4 +1,5 @@
 mod ast;
+mod async_transform;
 mod lexer;
 mod parser;
 mod resolve;
@@ -50,6 +51,17 @@ fn compile(file: &PathBuf) -> bool {
     for diag in &resolve_result.diagnostics {
         eprintln!("name error: {:?}", diag);
         had_error = true;
+    }
+
+    let async_result = async_transform::transform(&parse_result.module);
+
+    for diag in &async_result.diagnostics {
+        eprintln!("async warning: {}", diag.message);
+        // Async transform diagnostics are warnings, not hard errors.
+    }
+
+    if !async_result.machines.is_empty() {
+        eprintln!("info: {} async state machine(s) found", async_result.machines.len());
     }
 
     !had_error
