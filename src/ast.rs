@@ -1,4 +1,4 @@
-/// The Mandy AST.
+/// The Emmy AST.
 ///
 /// Every node carries two source slices borrowed from the original source `&str`:
 ///

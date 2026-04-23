@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "mandy", about = "The Mandy compiler", version)]
+#[command(name = "emmy", about = "The Emmy compiler", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -16,12 +16,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compile a Mandy source file.
+    /// Compile an Emmy source file.
     Build {
         /// Source file to compile.
         file: PathBuf,
     },
-    /// Compile and run a Mandy source file.
+    /// Compile and run an Emmy source file.
     Run {
         /// Source file to run.
         file: PathBuf,
