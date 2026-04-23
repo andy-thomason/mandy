@@ -215,6 +215,44 @@ fn codegen_module<M: Module>(
         .map(|s| (s.name.clone(), s.fields.len()))
         .collect();
 
+    // ── Pass 1b: declare and emit vtable data. ───────────────────────────
+    // For each vtable, create an array of function pointers (I64 values).
+    // Note: Proper initialization with function pointers requires using
+    // Cranelift's module initialization API which varies between JIT/AOT.
+    // For now, we declare the vtable symbol so relocations can reference it.
+    for vtable in &ir.vtables {
+        // Validate that all methods are defined.
+        let mut all_methods_found = true;
+        for fn_name in &vtable.methods {
+            if !func_ids.contains_key(fn_name) {
+                diags.push(CodegenDiagnostic {
+                    message: format!("vtable '{}' references unknown function '{}'", 
+                                   vtable.vtable_name, fn_name),
+                });
+                all_methods_found = false;
+            }
+        }
+
+        // Declare the vtable as exported data.
+        // TODO: Initialize vtable with function pointers using module-specific APIs
+        // (JIT requires runtime initialization; AOT requires linker relocations)
+        if all_methods_found {
+            match module.declare_data(
+                &vtable.vtable_name,
+                Linkage::Export,
+                true,     // is_final
+                false,    // writable
+            ) {
+                Ok(_data_id) => {
+                    // Successfully declared; initialization is deferred to a later pass.
+                }
+                Err(e) => diags.push(CodegenDiagnostic {
+                    message: format!("declare vtable '{}': {}", vtable.vtable_name, e),
+                }),
+            }
+        }
+    }
+
     // ── Pass 2: compile each function body. ───────────────────────────────
     let mut func_ctx = FunctionBuilderContext::new();
     for fn_ir in &ir.functions {
