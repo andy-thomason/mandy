@@ -16,6 +16,15 @@ enum Command {
     Check {
         /// Source file to check.
         file: PathBuf,
+        /// Dump Marietta IR.
+        #[arg(long)]
+        dump_ir: bool,
+        /// Dump Cranelift IR.
+        #[arg(long)]
+        dump_clir: bool,
+        /// Dump generated assembly.
+        #[arg(long)]
+        dump_asm: bool,
     },
     /// Compile a Marietta source file to a native object file.
     Build {
@@ -24,11 +33,29 @@ enum Command {
         /// Output object file path (defaults to <file>.o).
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Dump Marietta IR.
+        #[arg(long)]
+        dump_ir: bool,
+        /// Dump Cranelift IR.
+        #[arg(long)]
+        dump_clir: bool,
+        /// Dump generated assembly.
+        #[arg(long)]
+        dump_asm: bool,
     },
     /// Compile and JIT-execute a Marietta source file.
     Run {
         /// Source file to run.
         file: PathBuf,
+        /// Dump Marietta IR.
+        #[arg(long)]
+        dump_ir: bool,
+        /// Dump Cranelift IR.
+        #[arg(long)]
+        dump_clir: bool,
+        /// Dump generated assembly.
+        #[arg(long)]
+        dump_asm: bool,
     },
 }
 
@@ -91,28 +118,43 @@ fn main() {
     let cli = Cli::parse();
 
     let success = match cli.command {
-        Command::Check { file } => {
+        Command::Check { file, dump_ir, dump_clir, dump_asm } => {
             let Some(source) = read_source(&file) else { std::process::exit(1) };
             let source_with_std = load_with_stdlib(&source);
-            let result = pipeline::check(&source_with_std);
+            let opts = pipeline::DumpOptions {
+                dump_ir,
+                dump_clir,
+                dump_asm,
+            };
+            let result = pipeline::check(&source_with_std, &opts);
             print_result(&result);
             result.success
         }
 
-        Command::Build { file, output } => {
+        Command::Build { file, output, dump_ir, dump_clir, dump_asm } => {
             let Some(source) = read_source(&file) else { std::process::exit(1) };
             let source_with_std = load_with_stdlib(&source);
             let name   = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
             let output = output.unwrap_or_else(|| file.with_extension("o"));
-            let result = pipeline::build(&source_with_std, &name, &output);
+            let opts = pipeline::DumpOptions {
+                dump_ir,
+                dump_clir,
+                dump_asm,
+            };
+            let result = pipeline::build(&source_with_std, &name, &output, &opts);
             print_result(&result);
             result.success
         }
 
-        Command::Run { file } => {
+        Command::Run { file, dump_ir, dump_clir, dump_asm } => {
             let Some(source) = read_source(&file) else { std::process::exit(1) };
             let source_with_std = load_with_stdlib(&source);
-            let result = pipeline::run(&source_with_std);
+            let opts = pipeline::DumpOptions {
+                dump_ir,
+                dump_clir,
+                dump_asm,
+            };
+            let result = pipeline::run(&source_with_std, &opts);
             print_result(&result);
             result.success
         }

@@ -728,7 +728,7 @@ impl<'src, 'res> TypeChecker<'src, 'res> {
                 self.store.intern(Type::MultiSlice { elem: elem_ty, rank })
             }
 
-            ExprKind::StructInit { type_name, fields } => {
+            ExprKind::StructInit { type_name: _, fields } => {
                 // Look up the struct type by name.
                 // The type_name should have been resolved by resolve.rs.
                 let use_id = self.node_id(expr.src);
@@ -1010,6 +1010,7 @@ mod tests {
         run(src).diagnostics.is_empty()
     }
 
+    #[allow(dead_code)]
     fn resolved_type(result: &mut InferResult<'_>, src_slice: &str) -> Type {
         // Find the NodeId whose offset equals where `src_slice` appears in the source.
         // We search the types map for any NodeId whose offset corresponds.

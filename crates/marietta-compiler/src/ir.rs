@@ -991,7 +991,7 @@ impl<'src, 'ir> Lowerer<'src, 'ir> {
                     
                     // Static dispatch: `receiver.method(args)` where receiver is a concrete struct.
                     // Look up the concrete type of the receiver and emit a direct call.
-                    if let ExprKind::Name(name) = &obj.kind {
+                    if let ExprKind::Name(_) = &obj.kind {
                         let base = self.source.as_ptr() as usize;
                         let ptr  = obj.src.as_ptr() as usize;
                         let obj_nid = NodeId(ptr.saturating_sub(base));

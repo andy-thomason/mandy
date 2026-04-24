@@ -1042,7 +1042,6 @@ pub fn parse(source: &str) -> ParseResult<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::*;
 
     fn module(src: &str) -> Module<'_> {
         let r = parse(src);

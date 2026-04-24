@@ -30,7 +30,6 @@ impl MStrHeader {
         let len = bytes.len();
         
         // Allocate space for header + string data
-        let layout = Layout::new::<MStrHeader>();
         let total_size = std::mem::size_of::<MStrHeader>() + len;
         let total_layout = Layout::from_size_align(total_size, 8).unwrap();
         
@@ -56,8 +55,8 @@ impl MStrHeader {
 
     /// Get the string as a Rust str (without lifetime safety).
     pub unsafe fn as_str(&self) -> &'static str {
-        let slice = std::slice::from_raw_parts(self.ptr, self.len as usize);
-        std::str::from_utf8_unchecked(slice)
+        let slice = unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) };
+        unsafe { std::str::from_utf8_unchecked(slice) }
     }
 
     /// Atomically increment the reference count.

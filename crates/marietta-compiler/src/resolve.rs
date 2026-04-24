@@ -61,6 +61,7 @@ enum BindingKind {
     /// Trait name.
     Trait,
     /// Loop variable (`for x in …`).
+    #[allow(dead_code)]
     LoopVar,
     /// Implicit assignment (`x = …` with no `var`/`let`).
     Assign,

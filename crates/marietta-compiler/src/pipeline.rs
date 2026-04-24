@@ -13,6 +13,21 @@ use std::path::Path;
 use crate::{actor, async_transform, codegen, ir, parser, resolve, types};
 
 // ---------------------------------------------------------------------------
+// Dump options
+// ---------------------------------------------------------------------------
+
+/// Options for dumping intermediate representations.
+#[derive(Debug, Clone, Default)]
+pub struct DumpOptions {
+    /// Dump Marietta IR to stdout.
+    pub dump_ir: bool,
+    /// Dump Cranelift IR to stdout.
+    pub dump_clir: bool,
+    /// Dump generated assembly to stdout.
+    pub dump_asm: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Public result type
 // ---------------------------------------------------------------------------
 
@@ -36,12 +51,13 @@ impl PipelineResult {
 // ---------------------------------------------------------------------------
 
 struct FrontEnd<'src> {
-    source:        &'src str,
-    parse_result:  parser::ParseResult<'src>,
+    source:         &'src str,
+    parse_result:   parser::ParseResult<'src>,
+    #[allow(dead_code)]
     resolve_result: resolve::ResolveResult<'src>,
-    infer_result:  types::InferResult<'src>,
-    had_error:     bool,
-    diagnostics:   Vec<String>,
+    infer_result:   types::InferResult<'src>,
+    had_error:      bool,
+    diagnostics:    Vec<String>,
 }
 
 impl<'src> FrontEnd<'src> {
@@ -79,7 +95,7 @@ impl<'src> FrontEnd<'src> {
 ///
 /// Suitable for `marietta check`: reports parse, name-resolution, and type
 /// errors as quickly as possible.
-pub fn check(source: &str) -> PipelineResult {
+pub fn check(source: &str, opts: &DumpOptions) -> PipelineResult {
     let mut fe = FrontEnd::run(source);
     let mut res = if fe.had_error { PipelineResult::fail() } else { PipelineResult::ok() };
     res.diagnostics.append(&mut fe.diagnostics);
@@ -108,6 +124,13 @@ pub fn check(source: &str) -> PipelineResult {
         res.push(format!("info: {} function(s) lowered to IR", ir_module.functions.len()));
     }
 
+    if opts.dump_ir {
+        println!("\n=== Marietta IR ===");
+        for func in &ir_module.functions {
+            println!("{func}");
+        }
+    }
+
     res
 }
 
@@ -119,7 +142,7 @@ pub fn check(source: &str) -> PipelineResult {
 ///
 /// `name` is used as the module name embedded in the object file (typically
 /// the stem of the source file name).
-pub fn build(source: &str, name: &str, output: &Path) -> PipelineResult {
+pub fn build(source: &str, name: &str, output: &Path, opts: &DumpOptions) -> PipelineResult {
     let mut fe = FrontEnd::run(source);
     let mut res = if fe.had_error { PipelineResult::fail() } else { PipelineResult::ok() };
     res.diagnostics.append(&mut fe.diagnostics);
@@ -130,7 +153,14 @@ pub fn build(source: &str, name: &str, output: &Path) -> PipelineResult {
         res.push(format!("ir warning: {}", d.message));
     }
 
-    let diags = codegen::codegen_object(&ir_module, name, output);
+    if opts.dump_ir {
+        println!("\n=== Marietta IR ===");
+        for func in &ir_module.functions {
+            println!("{func}");
+        }
+    }
+
+    let diags = codegen::codegen_object(&ir_module, name, output, opts);
     for d in &diags {
         res.push(format!("codegen: {}", d.message));
     }
@@ -149,7 +179,7 @@ pub fn build(source: &str, name: &str, output: &Path) -> PipelineResult {
 // ---------------------------------------------------------------------------
 
 /// JIT-compile `source` and execute its `main()` function, if present.
-pub fn run(source: &str) -> PipelineResult {
+pub fn run(source: &str, opts: &DumpOptions) -> PipelineResult {
     let mut fe = FrontEnd::run(source);
     let mut res = if fe.had_error { PipelineResult::fail() } else { PipelineResult::ok() };
     res.diagnostics.append(&mut fe.diagnostics);
@@ -160,7 +190,14 @@ pub fn run(source: &str) -> PipelineResult {
         res.push(format!("ir warning: {}", d.message));
     }
 
-    let artifact = codegen::codegen_jit(&ir_module);
+    if opts.dump_ir {
+        println!("\n=== Marietta IR ===");
+        for func in &ir_module.functions {
+            println!("{func}");
+        }
+    }
+
+    let artifact = codegen::codegen_jit(&ir_module, opts);
     for d in &artifact.diagnostics {
         res.push(format!("codegen: {}", d.message));
     }
@@ -171,7 +208,7 @@ pub fn run(source: &str) -> PipelineResult {
     if let Some(ptr) = unsafe { artifact.fn_ptr("main") } {
         res.push("info: executing main()".to_string());
         let f: extern "C" fn() = unsafe { std::mem::transmute(ptr) };
-        unsafe { f() };
+        f();
     } else {
         res.push("info: no main() function — compilation succeeded".to_string());
     }

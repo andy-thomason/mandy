@@ -100,7 +100,7 @@ fn to_cl_type(ty: &IrType) -> Option<cranelift_codegen::ir::Type> {
 /// JIT-compile `ir` using Cranelift.
 /// Returns a [`JitArtifact`] whose function pointers are valid for the
 /// lifetime of the returned value.
-pub fn codegen_jit(ir: &IrModule) -> JitArtifact {
+pub fn codegen_jit(ir: &IrModule, dump_opts: &crate::pipeline::DumpOptions) -> JitArtifact {
     use cranelift_jit::{JITBuilder, JITModule};
 
     let mut flags_b = settings::builder();
@@ -117,8 +117,20 @@ pub fn codegen_jit(ir: &IrModule) -> JitArtifact {
     let mut module  = JITModule::new(jit_builder);
 
     let mut diags   = Vec::new();
-    let func_ids    = codegen_module(ir, &mut module, &mut diags);
+    let (func_ids, cranelift_irs) = codegen_module(ir, &mut module, &mut diags);
     module.finalize_definitions().expect("JIT finalize failed");
+
+    if dump_opts.dump_clir {
+        println!("\n=== Cranelift IR ===");
+        for ir_text in &cranelift_irs {
+            println!("{ir_text}");
+        }
+    }
+
+    if dump_opts.dump_asm {
+        println!("\n=== Generated Assembly ===");
+        println!("(Assembly dump not yet implemented)");
+    }
 
     JitArtifact { module, func_ids, diagnostics: diags }
 }
@@ -129,7 +141,7 @@ pub fn codegen_jit(ir: &IrModule) -> JitArtifact {
 
 /// Compile `ir` to a native object file at `output`.
 /// Returns any diagnostics (warnings and errors) produced.
-pub fn codegen_object(ir: &IrModule, name: &str, output: &Path) -> Vec<CodegenDiagnostic> {
+pub fn codegen_object(ir: &IrModule, name: &str, output: &Path, dump_opts: &crate::pipeline::DumpOptions) -> Vec<CodegenDiagnostic> {
     use cranelift_object::{ObjectBuilder, ObjectModule};
 
     let mut flags_b = settings::builder();
@@ -150,7 +162,19 @@ pub fn codegen_object(ir: &IrModule, name: &str, output: &Path) -> Vec<CodegenDi
 
     let mut module = ObjectModule::new(obj_builder);
     let mut diags  = Vec::new();
-    codegen_module(ir, &mut module, &mut diags);
+    let (_func_ids, cranelift_irs) = codegen_module(ir, &mut module, &mut diags);
+
+    if dump_opts.dump_clir {
+        println!("\n=== Cranelift IR ===");
+        for ir_text in &cranelift_irs {
+            println!("{ir_text}");
+        }
+    }
+
+    if dump_opts.dump_asm {
+        println!("\n=== Generated Assembly ===");
+        println!("(Assembly dump not yet implemented)");
+    }
 
     let product = module.finish();
     match product.emit() {
@@ -172,7 +196,7 @@ fn codegen_module<M: Module>(
     ir:     &IrModule,
     module: &mut M,
     diags:  &mut Vec<CodegenDiagnostic>,
-) -> HashMap<String, FuncId> {
+) -> (HashMap<String, FuncId>, Vec<String>) {
     let mut func_ids: HashMap<String, FuncId> = HashMap::new();
 
     // ── Pass 1: declare every function so forward calls resolve. ──────────
@@ -216,6 +240,30 @@ fn codegen_module<M: Module>(
         .map(|s| (s.name.clone(), s.fields.len()))
         .collect();
 
+    // ── Pass 1a: collect and allocate string constants. ──────────────────
+    // For each unique string literal, allocate memory and store the pointer.
+    let mut str_data: HashMap<String, *const u8> = HashMap::new();
+    for fn_ir in &ir.functions {
+        for bb in &fn_ir.blocks {
+            for inst in &bb.insts {
+                if let InstKind::Const { val: ConstVal::String(s), .. } = &inst.kind {
+                    if !str_data.contains_key(s) {
+                        // Allocate memory for the string
+                        let bytes = s.as_bytes();
+                        let ptr = unsafe {
+                            let layout = std::alloc::Layout::from_size_align_unchecked(bytes.len() + 1, 1);
+                            let ptr = std::alloc::alloc(layout) as *mut u8;
+                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+                            *ptr.add(bytes.len()) = 0; // Null-terminate
+                            ptr as *const u8
+                        };
+                        str_data.insert(s.clone(), ptr);
+                    }
+                }
+            }
+        }
+    }
+
     // ── Pass 1b: declare and emit vtable data. ───────────────────────────
     // For each vtable, create an array of function pointers (I64 values).
     // Note: Proper initialization with function pointers requires using
@@ -256,6 +304,7 @@ fn codegen_module<M: Module>(
 
     // ── Pass 2: compile each function body. ───────────────────────────────
     let mut func_ctx = FunctionBuilderContext::new();
+    let mut cranelift_irs = Vec::new();
     for fn_ir in &ir.functions {
         let Some(&func_id) = func_ids.get(&fn_ir.name) else { continue };
 
@@ -267,15 +316,19 @@ fn codegen_module<M: Module>(
             ctx.func.signature.returns.push(AbiParam::new(t));
         }
 
-        compile_fn(fn_ir, &func_ids, &fn_sigs, &vtable_fn_names, &struct_field_count, module, &mut ctx.func, &mut func_ctx, diags);
+        compile_fn(fn_ir, &func_ids, &fn_sigs, &vtable_fn_names, &struct_field_count, module, &mut ctx.func, &mut func_ctx, diags, &str_data);
 
         if let Err(e) = module.define_function(func_id, &mut ctx) {
             diags.push(CodegenDiagnostic { message: format!("define '{}': {e}", fn_ir.name) });
         }
+        
+        // Capture Cranelift IR before clearing the context
+        cranelift_irs.push(format!("{}", ctx.func));
+        
         module.clear_context(&mut ctx);
     }
 
-    func_ids
+    (func_ids, cranelift_irs)
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +345,7 @@ fn compile_fn<M: Module>(
     cl_func:             &mut Function,
     func_ctx:            &mut FunctionBuilderContext,
     diags:               &mut Vec<CodegenDiagnostic>,
+    str_data:            &HashMap<String, *const u8>,
 ) {
     if fn_ir.blocks.is_empty() { return; }
 
@@ -377,7 +431,7 @@ fn compile_fn<M: Module>(
         for inst in &bb.insts {
             translate_inst(
                 &inst.kind, &mut b, &mut val_map, &var_map,
-                func_ids, fn_sigs, vtable_fn_names, struct_field_count, module, diags,
+                func_ids, fn_sigs, vtable_fn_names, struct_field_count, module, diags, str_data,
             );
         }
 
@@ -458,9 +512,10 @@ fn translate_inst<M: Module>(
     func_ids:            &HashMap<String, FuncId>,
     fn_sigs:             &HashMap<String, (Vec<IrType>, IrType)>,
     vtable_fn_names:     &HashMap<(String, usize), String>,
-    struct_field_count:  &HashMap<String, usize>,
+    _struct_field_count: &HashMap<String, usize>,
     module:              &mut M,
     diags:               &mut Vec<CodegenDiagnostic>,
+    str_data:            &HashMap<String, *const u8>,
 ) {
     match inst {
         // Alloc: the Variable was pre-declared; nothing to emit at this site.
@@ -485,7 +540,7 @@ fn translate_inst<M: Module>(
 
         // Constant.
         InstKind::Const { dst, val, ty } => {
-            if let Some(v) = emit_const(b, val, ty) {
+            if let Some(v) = emit_const(b, val, ty, str_data) {
                 val_map.insert(*dst, v);
             }
         }
@@ -661,9 +716,10 @@ fn translate_inst<M: Module>(
 // ---------------------------------------------------------------------------
 
 fn emit_const(
-    b:   &mut FunctionBuilder<'_>,
-    val: &ConstVal,
-    ty:  &IrType,
+    b:        &mut FunctionBuilder<'_>,
+    val:      &ConstVal,
+    ty:       &IrType,
+    str_data: &HashMap<String, *const u8>,
 ) -> Option<ClValue> {
     let cl_ty = to_cl_type(ty)?;
     Some(match val {
@@ -681,11 +737,13 @@ fn emit_const(
         },
         ConstVal::Bool(bv) => b.ins().iconst(cl_ty, *bv as i64),
         ConstVal::None     => b.ins().iconst(cl_ty, 0),
-        ConstVal::String(_s) => {
-            // String literals are not yet fully supported in JIT.
-            // For now, emit a null pointer.
-            // TODO: Implement string pool or data sections for string literals
-            b.ins().iconst(cl_ty, 0)
+        ConstVal::String(s) => {
+            // Return a pointer to the string data if available, otherwise null
+            if let Some(&ptr) = str_data.get(s) {
+                b.ins().iconst(cl_ty, ptr as i64)
+            } else {
+                b.ins().iconst(cl_ty, 0)
+            }
         }
     })
 }
@@ -838,6 +896,7 @@ fn translate_term(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(unused_unsafe)]
 mod tests {
     use super::*;
     use crate::{ir, parser, resolve, types};
@@ -852,7 +911,8 @@ mod tests {
     /// Compile to JIT and return the artifact.
     fn jit(src: &str) -> JitArtifact {
         let m = run_ir(src);
-        codegen_jit(&m)
+        let opts = crate::pipeline::DumpOptions { dump_ir: false, dump_clir: false, dump_asm: false };
+        codegen_jit(&m, &opts)
     }
 
     // -----------------------------------------------------------------------
